@@ -31,6 +31,10 @@ audio_queue = queue.Queue()
 # If the chunk is filled to the max, it will be emptied
 length_queue = queue.Queue(maxsize=LENGHT_IN_SEC)
 
+# This queue holds all the transcribed text chunks that will be concatenated together
+text_queue = queue.Queue()
+
+speaker_text = " "
 # Whisper model
 whisper = WhisperModel("tiny", device="cpu", compute_type="int8", cpu_threads=WHISPER_THREADS, download_root="./models")
 
@@ -78,7 +82,7 @@ def consumer_thread(stats):
             # We index it so it won't get removed
             audio_data_to_process += length_queue.queue[i]
 
-        # convert the bytes data toa  numpy array
+        # convert the bytes data to a numpy array
         audio_data_array: np.ndarray = np.frombuffer(audio_data_to_process, np.int16).astype(np.float32) / 255.0
         # audio_data_array = np.expand_dims(audio_data_array, axis=0)
 
@@ -88,21 +92,25 @@ def consumer_thread(stats):
                                          vad_filter=True,
                                          vad_parameters=dict(min_silence_duration_ms=1000))
         segments = [s.text for s in segments]
+        print("segments: ", segments)
 
         transcription_end_time = time.time()
 
         transcription = " ".join(segments)
         # remove anything from the text which is between () or [] --> these are non-verbal background noises/music/etc.
-        transcription = re.sub(r"\[.*\]", "", transcription)
-        transcription = re.sub(r"\(.*\)", "", transcription)
+        # transcription = re.sub(r"\[.*\]", "", transcription)
+        # transcription = re.sub(r"\(.*\)", "", transcription)
         # We do this for the more clean visualization (when the next transcription we print would be shorter then the one we printed)
-        transcription = transcription.ljust(MAX_SENTENCE_CHARACTERS, " ")
+        # transcription = transcription.ljust(MAX_SENTENCE_CHARACTERS, " ")
 
         transcription_postprocessing_end_time = time.time()
 
-        print(transcription, end='\r', flush=True)
+        # print(transcription, end='\r', flush=True)
+        print("original: ", transcription)
 
         audio_queue.task_done()
+
+        text_queue.put(transcription)
 
         overall_elapsed_time = transcription_postprocessing_end_time - transcription_start_time
         transcription_elapsed_time = transcription_end_time - transcription_start_time
@@ -111,19 +119,35 @@ def consumer_thread(stats):
         stats["transcription"].append(transcription_elapsed_time)
         stats["postprocessing"].append(postprocessing_elapsed_time)
 
+    
+def collector_thread():
+    global speaker_text
+    count = 0
+    while True:
+        count += 1
+        # print("text queue: ", count, text_queue.get())
+        text = text_queue.get()
+        speaker_text = speaker_text + text
+        text_queue.task_done()
+        # print("transcribed: ", count, speaker_text)
+
 
 if __name__ == "__main__":
     stats: Dict[str, List[float]] = {"overall": [], "transcription": [], "postprocessing": []}
 
-    producer = threading.Thread(target=producer_thread, daemon=True)
+    producer = threading.Thread(target=producer_thread)
     producer.start()
 
-    consumer = threading.Thread(target=consumer_thread, args=(stats,), daemon=True)
+    consumer = threading.Thread(target=consumer_thread, args=(stats,))
     consumer.start()
+
+    collector = threading.Thread(target=collector_thread)
+    collector.start()
 
     try:
         producer.join()
         consumer.join()
+        collector.join()
     except KeyboardInterrupt:
         print("Exiting...")
         # print out the statistics

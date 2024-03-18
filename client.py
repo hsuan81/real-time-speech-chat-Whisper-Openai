@@ -86,18 +86,22 @@ def consumer_thread(stats):
             transcription = send_audio_to_server(audio_data_to_process)
             # remove anything from the text which is between () or [] --> these are non-verbal background noises/music/etc.
             transcription = re.sub(r"\[.*\]", "", transcription)
-            transcription = re.sub(r"\(.*\)", "", transcription)
+            # transcription = re.sub(r"\(.*\)", "", transcription)
         except:
             transcription = "Error"
 
         transcription_end_time = time.time()
+        # print("testing")
+        sys.stdout.write(transcription)
 
         # We do this for the more clean visualization (when the next transcription we print would be shorter then the one we printed)
         transcription_to_visualize = transcription.ljust(MAX_SENTENCE_CHARACTERS, " ")
 
         transcription_postprocessing_end_time = time.time()
 
-        sys.stdout.write('\033[K' + transcription_to_visualize + '\r')
+        
+        # sys.stdout.write('\033[K' + transcription_to_visualize + '\r')
+       
 
         audio_queue.task_done()
 

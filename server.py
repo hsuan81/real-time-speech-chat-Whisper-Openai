@@ -53,8 +53,10 @@ async def predict(audio_data: bytes = Depends(parse_body)):
 
     try:
         # Run the prediction on the audio data
+        # run the blocking function in another thread
         result = await asyncio.get_running_loop().run_in_executor(None, execute_blocking_whisper_prediction, model,
                                                                   audio_data_array)
+        print("result", result)
 
     except Exception as e:
         print(e)
