@@ -4,3 +4,4 @@ tmp_audio/
 asd.py
 test-*
 .env
+playground*
