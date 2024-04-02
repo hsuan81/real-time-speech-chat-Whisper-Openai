@@ -4,8 +4,10 @@ import argparse
 import os
 import time
 import re
+import io
 import numpy as np
 import speech_recognition as sr
+import wave
 
 # import whisper
 from faster_whisper import WhisperModel
@@ -29,6 +31,112 @@ MAX_SENTENCE_CHARACTERS = 80
 # transcribe = None
 end_of_speech = None
 silence_count = 0
+
+
+def source_from_microphone(
+    audio_queue, default_microphone, energy_threshold=None, record_timeout=None
+):
+    # global transcribe
+    recorder = sr.Recognizer()
+    recorder.energy_threshold = energy_threshold
+    recorder.dynamic_energy_threshold = False
+
+    if "linux" in platform:
+        mic_name = default_microphone
+        if not mic_name or mic_name == "list":
+            print("Available microphone devices are: ")
+            for index, name in enumerate(sr.Microphone.list_microphone_names()):
+                print(f'Microphone with name "{name}" found')
+            return
+        else:
+            for index, name in enumerate(sr.Microphone.list_microphone_names()):
+                if mic_name in name:
+                    source = sr.Microphone(sample_rate=16000, device_index=index)
+                    break
+    else:
+        source = sr.Microphone(sample_rate=16000)
+
+    with source:
+        recorder.adjust_for_ambient_noise(source)
+
+    def record_callback(_, audio: sr.AudioData) -> None:
+        """
+        Threaded callback function to receive audio data when recordings finish.
+        audio: An AudioData containing the recorded bytes.
+        """
+        # global transcribe
+        # Grab the raw bytes and push it into the thread safe queue.
+        # global transcribe
+        # print("Callback starts...")
+        data = audio.get_raw_data()
+        audio_queue.put(data)
+        # with transcribe_lock:
+        #     transcribe = True
+        transcribe.set()
+
+    # Create a background thread that will pass us raw audio bytes.
+    # We could do this manually but SpeechRecognizer provides a nice helper.
+    stop_listening = recorder.listen_in_background(
+        source, record_callback, phrase_time_limit=record_timeout
+    )
+
+    # Cue the user that we're ready to go.
+    print("Model loaded.\n")
+
+    return stop_listening
+
+
+def source_from_audiofile(file_path, slice_length_sec, audio_queue, stop_event):
+    """
+    Slice the audiofile (.wav file) with fixed interval specified and put the raw data to queue.
+    The aim of this function is to emulate the capture from microphone and data created by using Speech Recognition library.
+    """
+    with wave.open(file_path, "rb") as wf:
+        frame_rate = wf.getframerate()
+        frames_per_slice = int(frame_rate * slice_length_sec)
+        channels = wf.getnchannels()
+        offset = None
+        print("channels:", channels)
+        print("sample width:", wf.getsampwidth())
+        print("Sample rate:", frame_rate)
+
+        while not stop_event.is_set():
+            frames = wf.readframes(frames_per_slice)
+            if len(frames) == 0:  # Check for end of file
+                break
+
+            #     frames = io.BytesIO()
+            #     seconds_per_buffer = (4096 + 0.0) / frame_rate
+            #     elapsed_time = 0
+            #     offset_time = 0
+            #     offset_reached = False
+            #     while True:  # loop for the total number of chunks needed
+            #         if offset and not offset_reached:
+            #             offset_time += seconds_per_buffer
+            #             if offset_time > offset:
+            #                 offset_reached = True
+
+            #         buffer = source.stream.read(source.CHUNK)
+            #         if len(buffer) == 0:
+            #             break
+
+            #         if offset_reached or not offset:
+            #             elapsed_time += seconds_per_buffer
+            #             if duration and elapsed_time > duration:
+            #                 break
+
+            #             frames.write(buffer)
+
+            #     frame_data = frames.getvalue()
+            #     frames.close()
+
+            audio_data = sr.AudioData(frames, frame_rate, wf.getsampwidth())
+            audio_queue.put(audio_data.get_raw_data())
+
+        # Signal that slicing is done
+        # audio_queue.put(None)
+        print()
+        print("Finished slicing audio file.")
 
 
 def main():
@@ -62,6 +170,14 @@ def main():
         "consider it a new line in the transcription.",
         type=float,
     )
+    parser.add_argument(
+        "--mode",
+        default="test",
+        help="Specify the running mode. The 'test' mode take an .wav file as input, "
+        "while the 'prod' mode source the audio from microphone",
+        choices=["test", "prod"],
+    )
+
     if "linux" in platform:
         parser.add_argument(
             "--default_microphone",
@@ -73,34 +189,33 @@ def main():
     args = parser.parse_args()
 
     # The last time a recording was retrieved from the queue.
-    phrase_time = None
-    # Thread safe Queue for passing data from the threaded recording callback.
-    audio_queue = Queue()
+    # phrase_time = None
+
     # We use SpeechRecognizer to record our audio because it has a nice feature where it can detect when speech ends.
-    recorder = sr.Recognizer()
-    recorder.energy_threshold = args.energy_threshold
+    # recorder = sr.Recognizer()
+    # recorder.energy_threshold = args.energy_threshold
     # Definitely do this, dynamic energy compensation lowers the energy threshold dramatically to a point where the SpeechRecognizer never stops recording.
-    recorder.dynamic_energy_threshold = False
+    # recorder.dynamic_energy_threshold = False
 
     # print(sr.Microphone.list_microphone_names())
-    print(sr.Microphone.list_working_microphones())
+    # print(sr.Microphone.list_working_microphones())
 
     # Important for linux users.
     # Prevents permanent application hang and crash by using the wrong Microphone
-    if "linux" in platform:
-        mic_name = args.default_microphone
-        if not mic_name or mic_name == "list":
-            print("Available microphone devices are: ")
-            for index, name in enumerate(sr.Microphone.list_microphone_names()):
-                print(f'Microphone with name "{name}" found')
-            return
-        else:
-            for index, name in enumerate(sr.Microphone.list_microphone_names()):
-                if mic_name in name:
-                    source = sr.Microphone(sample_rate=16000, device_index=index)
-                    break
-    else:
-        source = sr.Microphone(sample_rate=16000)
+    # if "linux" in platform:
+    #     mic_name = args.default_microphone
+    #     if not mic_name or mic_name == "list":
+    #         print("Available microphone devices are: ")
+    #         for index, name in enumerate(sr.Microphone.list_microphone_names()):
+    #             print(f'Microphone with name "{name}" found')
+    #         return
+    #     else:
+    #         for index, name in enumerate(sr.Microphone.list_microphone_names()):
+    #             if mic_name in name:
+    #                 source = sr.Microphone(sample_rate=16000, device_index=index)
+    #                 break
+    # else:
+    #     source = sr.Microphone(sample_rate=16000)
 
     # Load / Download model
     model = args.model
@@ -117,38 +232,36 @@ def main():
 
     record_timeout = args.record_timeout
     phrase_timeout = args.phrase_timeout
-    transcribe = threading.Event()
-    send_data = threading.Event()
-    thread_terminate = threading.Event()
-
-    with source:
-        recorder.adjust_for_ambient_noise(source)
-
-    def record_callback(_, audio: sr.AudioData, transcribe=transcribe) -> None:
-        """
-        Threaded callback function to receive audio data when recordings finish.
-        audio: An AudioData containing the recorded bytes.
-        """
-        # Grab the raw bytes and push it into the thread safe queue.
-        # global transcribe
-        # print("Callback starts...")
-        data = audio.get_raw_data()
-        audio_queue.put(data)
-        # with transcribe_lock:
-        #     transcribe = True
-        transcribe.set()
-
-    # Create a background thread that will pass us raw audio bytes.
-    # We could do this manually but SpeechRecognizer provides a nice helper.
-    stop_listening = recorder.listen_in_background(
-        source, record_callback, phrase_time_limit=record_timeout
-    )
-
-    # Cue the user that we're ready to go.
-    print("Model loaded.\n")
-
+    # Thread safe Queue for passing data from the threaded recording callback.
+    audio_queue = Queue()
     length_queue = Queue(maxsize=LENGHT_IN_SEC)
     transcription_queue = Queue()
+
+    # with source:
+    #     recorder.adjust_for_ambient_noise(source)
+
+    # def record_callback(_, audio: sr.AudioData, transcribe=transcribe) -> None:
+    #     """
+    #     Threaded callback function to receive audio data when recordings finish.
+    #     audio: An AudioData containing the recorded bytes.
+    #     """
+    #     # Grab the raw bytes and push it into the thread safe queue.
+    #     # global transcribe
+    #     # print("Callback starts...")
+    #     data = audio.get_raw_data()
+    #     audio_queue.put(data)
+    #     # with transcribe_lock:
+    #     #     transcribe = True
+    #     transcribe.set()
+
+    # # Create a background thread that will pass us raw audio bytes.
+    # # We could do this manually but SpeechRecognizer provides a nice helper.
+    # stop_listening = recorder.listen_in_background(
+    #     source, record_callback, phrase_time_limit=record_timeout
+    # )
+
+    # # Cue the user that we're ready to go.
+    # print("Model loaded.\n")
 
     def consumer_thread(transcribe: threading.Event, thread_terminate: threading.Event):
         # global stored_transcription
@@ -323,7 +436,7 @@ def main():
         # print("Chat thread is running...")
         load_dotenv()  # Loads the .env file and sets its contents as environment variables
         api_key = os.getenv("OPENAI_API_KEY")
-        client = OpenAI()
+        # client = OpenAI()
         messages = [
             {
                 "role": "system",
@@ -395,6 +508,27 @@ def main():
 
     # monitor = threading.Thread(target=monitor_thread, daemon=True)
     # consumer = threading.Thread(target=consumer_thread, daemon=True)
+    transcribe = threading.Event()
+    # send_data = threading.Event()
+    thread_terminate = threading.Event()
+    stop_listening = None
+    audio_thread = None
+    mode = args.mode
+    if mode == "test":
+        print("Mode: test")
+        audio_file_path = "./Testing_AM_conv16000.wav"
+        slice_length_sec = 1
+        audio_thread = threading.Thread(
+            target=source_from_audiofile,
+            args=(audio_file_path, slice_length_sec, audio_queue, thread_terminate),
+        )
+        audio_thread.start()
+
+    elif mode == "prod":
+        print("Mode: prod")
+        stop_listening = source_from_microphone(
+            audio_queue, args.default_microphone, None, record_timeout
+        )
     consumer = threading.Thread(
         target=consumer_thread, args=(transcribe, thread_terminate)
     )
@@ -417,9 +551,12 @@ def main():
 
     except KeyboardInterrupt:
         print("KeyboardInterrupt occurs, running?", consumer.is_alive())
-        stop_listening(wait_for_stop=False)
+        if mode == "prod":
+            stop_listening(wait_for_stop=False)
         thread_terminate.set()
         consumer.join()
+        # if mode == "test":
+
         # transcription_queue.join()
 
         print()
