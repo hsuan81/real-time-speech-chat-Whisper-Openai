@@ -21,6 +21,7 @@ from dotenv import load_dotenv
 # import whisper
 from faster_whisper import WhisperModel
 from openai import OpenAI
+from pydub import AudioSegment
 
 # import torch
 
@@ -33,6 +34,43 @@ MAX_SENTENCE_CHARACTERS = 80
 # transcribe = None
 end_of_speech = None
 silence_count = 0
+
+
+def slice_audio(file_path, length_ms=1000):
+    audio = AudioSegment.from_wav(file_path)
+    return [audio[i : i + length_ms] for i in range(0, len(audio), length_ms)]
+
+
+def is_speech_chunk(chunk, sample_rate=16000, aggressiveness=3, frame_duration_ms=30):
+    vad = webrtcvad.Vad(aggressiveness)
+    frame_length = int(sample_rate * frame_duration_ms / 1000)  # in samples
+    bytes_per_sample = 2  # 16-bit audio
+    total_length = len(chunk)  # Total length of the chunk in bytes
+
+    # Iterate over the chunk in steps of frame_length * bytes_per_sample
+    for start in range(0, total_length, frame_length * bytes_per_sample):
+        end = start + frame_length * bytes_per_sample
+        frame = chunk[start:end]
+
+        # Check if the extracted frame is of the correct length
+        if len(frame) == frame_length * bytes_per_sample:
+            # print("length of frame:", len(frame))
+            # frames = b""
+            # for f in frame:
+            #     frames += f.raw_data
+            is_speech = vad.is_speech(frame.raw_data, sample_rate)
+            if is_speech:
+                return True
+
+    return False
+
+
+def chunk_to_audiodata(chunk, sample_rate=16000):
+    chunk_samples = np.array(chunk.get_array_of_samples())
+    chunk_bytes = chunk_samples.tobytes()
+    return sr.AudioData(
+        chunk_bytes, sample_rate, 2
+    )  # 2 bytes per sample for 16-bit audio
 
 
 def source_from_microphone(
@@ -88,55 +126,59 @@ def source_from_microphone(
     return stop_listening
 
 
-def source_from_multiaudiofiles(
-    audio_path_list, silence_duration, slice_length_sec, audio_queue, stop_event
-):
+def source_from_audiofile(file_path, slice_length_sec, audio_queue, stop_event):
     """
     Slice the audiofile (.wav file) with fixed interval specified and put the raw data to queue.
     The aim of this function is to emulate the capture from microphone and data created by using Speech Recognition library.
     """
-    frame_rate = 16000
-    # print(frame_rate)
-    frames_per_slice = int(frame_rate * slice_length_sec)
-    channels = 1
-    # print(channels)
-    sample_width = 2
-    for file_path in audio_path_list:
-        with wave.open(file_path, "rb") as wf:
-            # Retrieve the sample rate of the audio file, and then break it down into 1-sec long data for processing
-            # frame_rate = wf.getframerate()
-            # print(frame_rate)
-            # frames_per_slice = int(frame_rate * slice_length_sec)
-            # channels = wf.getnchannels()
-            # print(channels)
-            # sample_width = wf.getsampwidth()
-            # print(sample_width)
-            offset = None
-            # vad = webrtcvad.Vad(1)
-            # frame_duration = 30
-            # frame_length = int(frame_rate * frame_duration / 1000) * sample_width * channels
-            start_time = time.time()
-            while not stop_event.is_set():
-                frames = wf.readframes(frames_per_slice)
-                if len(frames) == 0:  # Check for end of file
-                    break
-                audio_data = sr.AudioData(frames, frame_rate, sample_width)
-                sleep(0.5)
-                audio_queue.put(audio_data.get_raw_data())
-                transcribe.set()
-        end_time = time.time()
-        # print("---sleep---")
-        sleep(silence_duration)
-    # Signal that slicing is done
-    # audio_queue.put(None)
-    print()
-    # print("start, end time:", start_time, end_time)
-    # print("reading audio duration:", end_time - start_time)
-    # print("Audio file loaded.")
-    # print("Finished slicing audio file.")
+
+    # process the first audio
+    # stop doing anything for specified seconds to simulate silence from users
+    # process the second audio
+    audio_chunks = slice_audio(file_path)
+
+    for chunk in audio_chunks:
+        if stop_event.is_set():
+            break
+        if len(chunk) == 0:
+            break
+        if is_speech_chunk(chunk):
+            audio_data = chunk_to_audiodata(chunk)
+            audio_queue.put(audio_data.get_raw_data())
+            transcribe.set()
+            # Process the audio_data as needed, e.g., speech recognition
+            # print("Processed a chunk with speech.")
+        else:
+            # print("Skipped a silent chunk.")
+            continue
+
+        # with wave.open(file_path, "rb") as wf:
+        #     # Retrieve the sample rate of the audio file, and then break it down into 1-sec long data for processing
+        #     frame_rate = wf.getframerate()
+        #     frames_per_slice = int(frame_rate * slice_length_sec)
+        #     channels = wf.getnchannels()
+        #     sample_width = wf.getsampwidth()
+        #     offset = None
+        #     # vad = webrtcvad.Vad(1)
+        #     # frame_duration = 30
+        #     # frame_length = int(frame_rate * frame_duration / 1000) * sample_width * channels
+
+        #     while not stop_event.is_set():
+        #         frames = wf.readframes(frames_per_slice)
+        #         if len(frames) == 0:  # Check for end of file
+        #             break
+        #         audio_data = sr.AudioData(frames, frame_rate, sample_width)
+        #         audio_queue.put(audio_data.get_raw_data())
+        #         transcribe.set()
+
+        # Signal that slicing is done
+        # audio_queue.put(None)
+        print()
+        print("Audio file loaded.")
+        # print("Finished slicing audio file.")
 
 
-def source_from_audiofile(file_path, slice_length_sec, audio_queue, stop_event):
+def source_from_audiofile_old(file_path, slice_length_sec, audio_queue, stop_event):
     """
     Slice the audiofile (.wav file) with fixed interval specified and put the raw data to queue.
     The aim of this function is to emulate the capture from microphone and data created by using Speech Recognition library.
@@ -304,6 +346,7 @@ def main():
 
         while True:
             # if transcribe.is_set():
+            prepare_start_time = time.time()
             if length_queue.qsize() >= LENGHT_IN_SEC:
                 with length_queue.mutex:
                     length_queue.queue.clear()
@@ -326,8 +369,7 @@ def main():
                 openaithread.start()
                 current_openaithread_id = openaithread.native_id
                 print(f"Current openaithread id: {current_openaithread_id}")
-                prepare_start_time = time.time()
-
+            prepare_end_time = time.time()
             # print("Prepare time:", prepare_end_time - prepare_start_time)
 
             try:
@@ -364,7 +406,7 @@ def main():
 
                 # transcription_postprocessing_end_time = time.time()
                 if transcription == "":
-                    # print("\n no text")
+                    print("\n no text")
                     pause_count += 1
                 else:
                     print(transcription, end="\r", flush=True)
@@ -378,20 +420,17 @@ def main():
             except queue.Empty:
                 #     # print("2-2")
                 print()
-                # print("queue is empty", audio_queue.empty(), length_queue.empty())
+                print("queue is empty", audio_queue.empty(), length_queue.empty())
                 pause_count += 1
 
             if pause_count >= 1:
-                prepare_end_time = time.time()
-
                 if transcribe.is_set():
                     # transcribe.clear()
                     print("Pause, Transcribe:", transcribe.is_set())
-                    transcribe.clear()
                     if transcription != "":
                         # print("add empty 2")
-                        # print()
-                        # print("1-" + transcription + "-")
+                        print()
+                        print("1-" + transcription + "-")
                         stored_transcription.append(transcription)
                         # transcription = ""
                     audio_data_to_process = b""
@@ -421,7 +460,7 @@ def main():
                         length_queue.queue.clear()
                         # print("Length:", len(transcription))
                     stored_transcription = []
-                    # transcribe.clear()
+                    transcribe.clear()
                     # sleep(1)
 
             else:
@@ -435,7 +474,7 @@ def main():
         # print("size of audio_queue", audio_queue.qsize())
         print("Terminating?", thread_terminate.is_set())
         if thread_terminate.is_set():
-            # print("audio queue empty?", audio_queue.empty())
+            print("audio queue empty?", audio_queue.empty())
             if transcription != "":
                 stored_transcription.append(transcription)
             audio_data_to_process = b""
@@ -462,8 +501,7 @@ def main():
             if current_openaithread_id is not None:
                 print("Join the subthread...")
                 openaithread.join()
-        # print("Transcribing start, end time:", prepare_start_time, prepare_end_time)
-        # print("Transcribing duration:", abs(prepare_start_time - prepare_end_time))
+
         print("consumer thread is closed")
 
     def chat_thread(transcribe: threading.Event, thread_terminate: threading.Event):
@@ -471,7 +509,7 @@ def main():
         # print("Chat thread is running...")
         load_dotenv()  # Loads the .env file and sets its contents as environment variables
         api_key = os.getenv("OPENAI_API_KEY")
-        client = OpenAI()
+        # client = OpenAI()
         messages = [
             {
                 "role": "system",
@@ -487,7 +525,7 @@ def main():
 
         # print("*** Finished setting up chat ***")
         # print("transcription queue size:", transcription_queue.qsize())
-        # print("Transcribe:", transcribe.is_set())
+        print("Transcribe:", transcribe.is_set())
 
         while True:
             # print("chat_thread loop start")
@@ -503,16 +541,13 @@ def main():
                 if transcription_queue.qsize() > 0:
                     user_input = transcription_queue.get(timeout=1)
                     form_message_from_transcription(user_input)
-                    print("chat prepared")
-                    response = client.chat.completions.create(
-                        model="gpt-3.5-turbo", messages=messages
-                    )
-                    print("get response")
-                    extracted_response = response.choices[0]
-                    if not transcribe.is_set():
-                        print("Response status:", extracted_response.finish_reason)
-                        print("AI response: ", extracted_response.message.content)
-                        form_message_from_response(extracted_response.message.content)
+                    # response = client.chat.completions.create(
+                    #     model="gpt-3.5-turbo", messages=messages
+                    # )
+                    # extracted_response = response.choices[0]
+                    # print("Response status:", extracted_response.finish_reason)
+                    # print("AI response: ", extracted_response.message.content)
+                    # form_message_from_response(extracted_response.message.content)
                     # print("Getting user input:", user_input)
                     transcription_queue.task_done()
             except Exception as e:
@@ -539,22 +574,12 @@ def main():
     if mode == "test":
         print("Mode: test")
         audio_file_path = "./all_Testing_20silence.wav"
-        # file_path_1 = "./Testing_AM_conv16000.wav"
-        # file_path_2 = "./Testing2_AM_conv16000.wav"
-        file_path_1 = "./rotterdam_buildings_conv16000.wav"
-        file_path_2 = "./What_is_the_capital_conv16000.wav"
         slice_length_sec = 1
-        silence_duration = 2
         audio_thread = threading.Thread(
-            target=source_from_multiaudiofiles,
-            args=(
-                [file_path_1, file_path_2],
-                silence_duration,
-                slice_length_sec,
-                audio_queue,
-                thread_terminate,
-            ),
+            target=source_from_audiofile,
+            args=(audio_file_path, slice_length_sec, audio_queue, thread_terminate),
         )
+        audio_thread.start()
 
     elif mode == "prod":
         print("Mode: prod")
@@ -574,8 +599,6 @@ def main():
         target=consumer_thread, args=(transcribe, thread_terminate)
     )
     # monitor.start()
-    if mode == "test":
-        audio_thread.start()
     consumer.start()
 
     try:
