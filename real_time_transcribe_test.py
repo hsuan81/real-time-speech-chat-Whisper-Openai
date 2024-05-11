@@ -469,6 +469,7 @@ def main():
     def chat_thread(transcribe: threading.Event, thread_terminate: threading.Event):
         # global transcribe
         # print("Chat thread is running...")
+        response_queue = Queue()
         load_dotenv()  # Loads the .env file and sets its contents as environment variables
         api_key = os.getenv("OPENAI_API_KEY")
         client = OpenAI()
@@ -485,6 +486,11 @@ def main():
         def form_message_from_response(response: str) -> None:
             messages.append({"role": "assistant", "content": response})
 
+        def response_handler():
+            while not response_queue.empty() and not transcribe.is_set():
+                response = response_queue.get()
+                print("AI Response:", response)
+
         # print("*** Finished setting up chat ***")
         # print("transcription queue size:", transcription_queue.qsize())
         # print("Transcribe:", transcribe.is_set())
@@ -497,28 +503,30 @@ def main():
             if transcribe.is_set():
                 # print("Waiting for user transcription...")
                 continue
-            print("Subworking...")
+            # print("Subworking...")
             try:
                 # print("transcription_queue:", transcription_queue.qsize())
                 if transcription_queue.qsize() > 0:
                     user_input = transcription_queue.get(timeout=1)
                     form_message_from_transcription(user_input)
-                    print("chat prepared")
+                    # print("chat prepared")
                     response = client.chat.completions.create(
                         model="gpt-3.5-turbo", messages=messages
                     )
                     print("get response")
                     extracted_response = response.choices[0]
-                    if not transcribe.is_set():
-                        print("Response status:", extracted_response.finish_reason)
-                        print("AI response: ", extracted_response.message.content)
-                        form_message_from_response(extracted_response.message.content)
+                    response_queue.put(extracted_response.message.content)
+                    # if not transcribe.is_set():
+                    #     print("Response status:", extracted_response.finish_reason)
+                    #     print("AI response: ", extracted_response.message.content)
+                    #     form_message_from_response(extracted_response.message.content)
                     # print("Getting user input:", user_input)
                     transcription_queue.task_done()
             except Exception as e:
                 print("Exception occurs:", e)
                 continue
-
+            else:
+                response_handler()
         print("Subthread is terminated.")
 
         # if consumer_thread_terminate.is_set():
@@ -541,8 +549,8 @@ def main():
         audio_file_path = "./all_Testing_20silence.wav"
         # file_path_1 = "./Testing_AM_conv16000.wav"
         # file_path_2 = "./Testing2_AM_conv16000.wav"
-        file_path_1 = "./rotterdam_buildings_conv16000.wav"
-        file_path_2 = "./What_is_the_capital_conv16000.wav"
+        file_path_1 = "./tmp_audio/rotterdam_buildings_conv16000.wav"
+        file_path_2 = "./tmp_audio/What_is_the_capital_conv16000.wav"
         slice_length_sec = 1
         silence_duration = 2
         audio_thread = threading.Thread(

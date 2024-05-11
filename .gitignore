@@ -6,3 +6,4 @@ test-*
 .env
 playground*
 .wav
+tts-output/
