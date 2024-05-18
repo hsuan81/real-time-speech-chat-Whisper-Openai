@@ -1,6 +1,6 @@
 pyaudio
-
 whisper-cpp-python
 faster-whisper
+TTS
 
 

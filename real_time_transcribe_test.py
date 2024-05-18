@@ -1,4 +1,4 @@
-#! python3.7
+#! python3.10
 
 import argparse
 import io
@@ -14,6 +14,7 @@ from sys import platform
 from time import sleep
 
 import numpy as np
+import pyaudio
 import speech_recognition as sr
 import webrtcvad
 from dotenv import load_dotenv
@@ -377,7 +378,7 @@ def main():
 
             except queue.Empty:
                 #     # print("2-2")
-                print()
+                # print()
                 # print("queue is empty", audio_queue.empty(), length_queue.empty())
                 pause_count += 1
 
@@ -386,7 +387,7 @@ def main():
 
                 if transcribe.is_set():
                     # transcribe.clear()
-                    print("Pause, Transcribe:", transcribe.is_set())
+                    # print("Pause, Transcribe:", transcribe.is_set())
                     transcribe.clear()
                     if transcription != "":
                         # print("add empty 2")
@@ -480,25 +481,72 @@ def main():
             },
         ]
 
+        # Instantiate PyAudio
+        p = pyaudio.PyAudio()
+        output_file = "output.wav"
+        history = ""
+
         def form_message_from_transcription(transcription: str) -> None:
             messages.append({"role": "user", "content": transcription})
 
         def form_message_from_response(response: str) -> None:
             messages.append({"role": "assistant", "content": response})
 
-        def response_handler():
+        def response_handler(history):
+            def callback(in_data, frame_count, time_info, status):
+                if transcribe.is_set():
+                    return (None, pyaudio.paComplete)
+                data = wf.readframes(frame_count)
+                return (data, pyaudio.paContinue)
+
             while not response_queue.empty() and not transcribe.is_set():
+                # wf = wave.open(output_file, "rb")
+                stream = p.open(
+                    format=p.get_format_from_width(wf.getsampwidth()),
+                    channels=wf.getnchannels(),
+                    rate=wf.getframerate(),
+                    output=True,
+                    stream_callback=callback,
+                )
+                stream.start_stream()
+
+                while stream.is_active():
+                    sleep(0.5)
+                    if thread_terminate.is_set():
+                        stream.stop_stream()
+                        print("====Stop playing the audio====")
+                        break
+                stream.close()
+                wf.close()
                 response = response_queue.get()
-                print("AI Response:", response)
+                history += response
+                # print()
+                # print("AI Response:", response)
+                form_message_from_response(response)
+
+                # tts_response = client.audio.speech.create(
+                #     model="tts-1",
+                #     voice="alloy",
+                #     input=response,
+                # )
+
+                # tts_response.with_streaming_response.metho("output.mp3")
 
         # print("*** Finished setting up chat ***")
         # print("transcription queue size:", transcription_queue.qsize())
         # print("Transcribe:", transcribe.is_set())
 
+        # response = client.chat.completions.create(
+        #     model="gpt-3.5-turbo", messages=messages
+        # )
+        # form_message_from_response(response.choices[0])
+
         while True:
             # print("chat_thread loop start")
             sleep(1)
             if thread_terminate.is_set():
+                print(history)
+                p.terminate()
                 break
             if transcribe.is_set():
                 # print("Waiting for user transcription...")
@@ -506,6 +554,7 @@ def main():
             # print("Subworking...")
             try:
                 # print("transcription_queue:", transcription_queue.qsize())
+                print()
                 if transcription_queue.qsize() > 0:
                     user_input = transcription_queue.get(timeout=1)
                     form_message_from_transcription(user_input)
@@ -513,8 +562,20 @@ def main():
                     response = client.chat.completions.create(
                         model="gpt-3.5-turbo", messages=messages
                     )
-                    print("get response")
+                    # print("get response")
                     extracted_response = response.choices[0]
+                    # tss
+                    tts_response = client.audio.speech.create(
+                        model="tts-1",
+                        voice="alloy",
+                        input=extracted_response.message.content,
+                        response_format="wav",
+                    )
+
+                    tts_response.stream_to_file(output_file)
+                    wf = wave.open(output_file, "rb")
+                    # print("\nput response and transcribe", transcribe.is_set())
+
                     response_queue.put(extracted_response.message.content)
                     # if not transcribe.is_set():
                     #     print("Response status:", extracted_response.finish_reason)
@@ -522,11 +583,14 @@ def main():
                     #     form_message_from_response(extracted_response.message.content)
                     # print("Getting user input:", user_input)
                     transcription_queue.task_done()
+                    response_handler(history)
+
             except Exception as e:
                 print("Exception occurs:", e)
                 continue
             else:
-                response_handler()
+                # response_handler(history)
+                pass
         print("Subthread is terminated.")
 
         # if consumer_thread_terminate.is_set():
