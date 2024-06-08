@@ -5,5 +5,8 @@ asd.py
 test-*
 .env
 playground*
+playground.py
 .wav
 tts-output/
+.wav
+models/

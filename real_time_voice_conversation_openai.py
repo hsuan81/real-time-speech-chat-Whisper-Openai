@@ -1,7 +1,6 @@
 #! python3.10
 
 import argparse
-import io
 import os
 import queue
 import re
@@ -23,9 +22,6 @@ from dotenv import load_dotenv
 from faster_whisper import WhisperModel
 from openai import OpenAI
 
-# import torch
-
-
 WHISPER_LANGUAGE = "en"
 WHISPER_THREADS = 4
 LENGHT_IN_SEC: int = 5
@@ -35,9 +31,11 @@ MAX_SENTENCE_CHARACTERS = 80
 
 
 def source_from_microphone(
-    audio_queue, default_microphone=None, energy_threshold=None, record_timeout=None
+    audio_queue: Queue,
+    default_microphone=None,
+    energy_threshold=None,
+    record_timeout=None,
 ):
-    # global transcribe
     recorder = sr.Recognizer()
     recorder.energy_threshold = energy_threshold
     recorder.dynamic_energy_threshold = False
@@ -69,20 +67,26 @@ def source_from_microphone(
         # set up transcribe event indicating it's in the transcribing mode
         transcribe.set()
 
+    # Cue the user that we're ready to go.
+    print("==========Model loaded.==========")
+
     # Create a background thread that will pass us raw audio bytes.
     # We could do this manually but SpeechRecognizer provides a nice helper.
     stop_listening = recorder.listen_in_background(
         source, record_callback, phrase_time_limit=record_timeout
     )
-
-    # Cue the user that we're ready to go.
-    print("Model loaded.\n")
-
+    print(
+        "==========Please wait for the speech of the OpenAI and start talk after hearing it.=========="
+    )
     return stop_listening
 
 
 def source_from_multiaudiofiles(
-    audio_path_list, silence_duration, slice_length_sec, audio_queue, stop_event
+    audio_path_list: list,
+    silence_duration: int,
+    slice_length_sec: int,
+    audio_queue: Queue,
+    stop_event: threading.Event,
 ):
     """
     Pass in a list of audio files and read each audiofile (.wav file) with fixed interval specified and put the raw data to queue.
@@ -112,7 +116,12 @@ def source_from_multiaudiofiles(
     # print("Audio file loaded.")
 
 
-def source_from_audiofile(file_path, slice_length_sec, audio_queue, stop_event):
+def source_from_audiofile(
+    file_path: str,
+    slice_length_sec: int,
+    audio_queue: Queue,
+    stop_event: threading.Event,
+):
     """
     Slice the audiofile (.wav file) with fixed interval specified and put the raw data to queue.
     The aim of this function is to emulate the capture from microphone and data created by using Speech Recognition library.
@@ -185,32 +194,6 @@ def main():
         )
     args = parser.parse_args()
 
-    # We use SpeechRecognizer to record our audio because it has a nice feature where it can detect when speech ends.
-    # recorder = sr.Recognizer()
-    # recorder.energy_threshold = args.energy_threshold
-    # Definitely do this, dynamic energy compensation lowers the energy threshold dramatically to a point where the SpeechRecognizer never stops recording.
-    # recorder.dynamic_energy_threshold = False
-
-    # print(sr.Microphone.list_microphone_names())
-    # print(sr.Microphone.list_working_microphones())
-
-    # Important for linux users.
-    # Prevents permanent application hang and crash by using the wrong Microphone
-    # if "linux" in platform:
-    #     mic_name = args.default_microphone
-    #     if not mic_name or mic_name == "list":
-    #         print("Available microphone devices are: ")
-    #         for index, name in enumerate(sr.Microphone.list_microphone_names()):
-    #             print(f'Microphone with name "{name}" found')
-    #         return
-    #     else:
-    #         for index, name in enumerate(sr.Microphone.list_microphone_names()):
-    #             if mic_name in name:
-    #                 source = sr.Microphone(sample_rate=16000, device_index=index)
-    #                 break
-    # else:
-    #     source = sr.Microphone(sample_rate=16000)
-
     # Load / Download model
     model = args.model
     if args.model != "large" and not args.non_english:
@@ -239,11 +222,10 @@ def main():
         """
         transcription = ""
         pause_count = 0  # pause_count is for counting the silence section
-        transcribe.set()
         current_openaithread_id = None
         openaithread = None
         stored_transcription = []
-
+        transcribe.set()
         while True:
             # Clear length_queue and add final definitive transcription to a list if it's full
             if length_queue.qsize() >= LENGHT_IN_SEC:
@@ -271,7 +253,7 @@ def main():
                 # If there is no audio data in the queue after waiting for two secs, it triggers queue.Empty exception and counts one silence section.
                 audio_data = audio_queue.get(timeout=2)
                 length_queue.put(audio_data)
-                audio_queue.task_done()  # 0601 added
+                audio_queue.task_done()
                 if not transcribe.is_set():
                     transcribe.set()
 
@@ -344,7 +326,7 @@ def main():
             else:
                 # If silence count is 0, start the transcribing mode.
                 if not transcribe.is_set():
-                    print("Transcribing...")
+                    # print("Transcribing...")
                     transcribe.set()
 
                 continue
@@ -352,6 +334,7 @@ def main():
         # print("Terminating?", thread_terminate.is_set())
         # If the program is terminate, no need to do the processing???
         if thread_terminate.is_set():
+            print("===In consumer terminating process===")
             if transcription != "":
                 stored_transcription.append(transcription)
             audio_data_to_process = b""
@@ -387,6 +370,7 @@ def main():
         response_queue = (
             Queue()
         )  # response_queue to store response from openai for later tts processing
+        tts_queue = Queue()
         load_dotenv()  # Loads the .env file and sets its contents as environment variables
         api_key = os.getenv("OPENAI_API_KEY")
         client = OpenAI()
@@ -429,31 +413,36 @@ def main():
                 return (data, pyaudio.paContinue)
 
             while not response_queue.empty() and not transcribe.is_set():
+                # while not tts_queue.empty() and not transcribe.is_set():
                 # wf = wave.open(output_file, "rb")
-                response = response_queue.get()
-                stream = p.open(
-                    format=p.get_format_from_width(wf.getsampwidth()),
-                    channels=wf.getnchannels(),
-                    rate=wf.getframerate(),
-                    output=True,
-                    stream_callback=callback,
-                )
-                stream.start_stream()
+                if not tts_queue.empty():
+                    response = response_queue.get()
+                    tts_queue.get()
+                    wf = wave.open(output_file, "rb")
 
-                while stream.is_active():
-                    # Sleeping for a short period is necessary to avoid blocking other threads and processing.
-                    sleep(0.5)
-                    if thread_terminate.is_set():
+                    stream = p.open(
+                        format=p.get_format_from_width(wf.getsampwidth()),
+                        channels=wf.getnchannels(),
+                        rate=wf.getframerate(),
+                        output=True,
+                        stream_callback=callback,
+                    )
+                    stream.start_stream()
+
+                    while stream.is_active():
+                        # Sleeping for a short period is necessary to avoid blocking other threads and processing.
                         sleep(0.5)
-                        stream.stop_stream()
-                        print("====Stop playing the audio====")
-                        break
-                stream.close()
-                wf.close()
-                history += response
-                # print()
-                # print("AI Response:", response)
-                form_message_from_response(response)
+                        if thread_terminate.is_set():
+                            sleep(0.5)
+                            stream.stop_stream()
+                            print("====Stop playing the audio====")
+                            break
+                    stream.close()
+                    wf.close()
+                    history += response
+                    # print()
+                    # print("AI Response:", response)
+                    form_message_from_response(response)
 
         while True:
             # Since the loop is running forever to send request anytime when transcribe event is not set, it needs to sleep to let consumer thread to process without blocking.
@@ -485,27 +474,25 @@ def main():
                     # This method is provided by Openai, and it often raises warning.
                     # It's an old problem, but it doesn't affect the program to proceed.
                     tts_response.stream_to_file(output_file)
+                    tts_queue.put(1)
                     # wf = wave.open(output_file, "rb")
                     # print("\nput response and transcribe", transcribe.is_set())
 
                     response_queue.put(extracted_response.message.content)
                     transcription_queue.task_done()
+                    print("==========OpenAI is answering==========")
                     response_handler(history)
-                    response_queue.task_done()  # 0601 added
+                    response_queue.task_done()
 
             except Exception as e:
                 print("Exception occurs:", e)
                 continue
-            # 0601 commented out
-            # else:
-            #     # response_handler(history)
-            #     pass
+
         print("Openai thread is terminated.")
         # audio_queue.task_done()
 
-    transcribe = (
-        threading.Event()
-    )  # for switching between transcribing mode and getting openai response mode
+    # for switching between transcribing mode and getting openai response mode
+    transcribe = threading.Event()
     thread_terminate = threading.Event()  # for signaling termination of this program
     stop_listening = None
     audio_thread = None
