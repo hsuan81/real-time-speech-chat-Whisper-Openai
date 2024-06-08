@@ -38,6 +38,8 @@ Contributions and feedback are welcome! Let's work together to improve and expan
 - [Fast-Whisper](https://github.com/SYSTRAN/faster-whisper)
 - OpenAI Whisper and TTS
 
+Please see `requirements.txt` for details.
+
 
 ## Installation
 
