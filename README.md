@@ -22,9 +22,10 @@ This project is a demonstration of the possibility of implementing real-time con
 ### Known Issues and Limitations:
 - **Bugs**: Errors of reading already closed audio file occur sometimes, but it won’t stop the program.
 
-- **Feature Completeness**: 
+- **Better Know before Running**: 
   - Using earphones is a must to try this application because it keeps listening all the time!!! By using the earphones, sound from your pc will not be treated as your voice and accidentally interrupt OpenAI's speech.
   - Transcribing starts once the model being loaded. Keep silent before hearing the OpenAI's speech.
+  - Run the application and talk at a rather quiet place. The vad feature is not optimized. Talking at a rather noisy place is prone to transcribing falsely.
   - DeprecationWarning `.with_streaming_response.method()` of OpenAI tts may occur. It’s an old problem and it won’t affect the execution of the program.
 
 - **Performance**: The application might not handle conversations efficiently. You may experience some latency in conversations.
@@ -82,7 +83,7 @@ In "test" mode, you need to prepare wav files in advance and set up the metadata
 
 ## Reference
 
-This project references the following projects.
+This project is built on and references the following projects.
 
 [
 whisper-live-transcription](https://github.com/gaborvecsei/whisper-live-transcription)
