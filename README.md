@@ -6,7 +6,8 @@ This project achieves a similar feat as the OpenAI's Chatgpt 4o real-time speech
 
 ## Demo
 
-[![YouTube](http://i.ytimg.com/vi/RHeetAxe9Ys/hqdefault.jpg)](https://www.youtube.com/watch?v=RHeetAxe9Ys)
+https://github.com/hsuan81/real-time-speech-chat-Whisper-Openai/assets/61041593/621ca193-2ccb-48be-9afa-f9f44cebf8d2
+
 
 
 
