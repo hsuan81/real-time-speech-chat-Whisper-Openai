@@ -66,6 +66,10 @@ def source_from_microphone(
 
     # Cue the user that we're ready to go.
     print("==========Model loaded.==========")
+    print(
+        "==========IMPORTANT NOTICE: PLEASE USE HEADSETS OR EARPHONES AT A VERY QUIET PLACE.=========="
+    )
+    print()
 
     # Create a background thread that will pass us raw audio bytes.
     # We could do this manually but SpeechRecognizer provides a nice helper.
@@ -75,6 +79,7 @@ def source_from_microphone(
     print(
         "==========Please wait for the speech of the OpenAI and start talk after hearing it.=========="
     )
+
     return stop_listening
 
 
@@ -482,7 +487,6 @@ def main():
                     tts_response.stream_to_file(output_file)
                     tts_queue.put(1)
                     # wf = wave.open(output_file, "rb")
-                    # print("\nput response and transcribe", transcribe.is_set())
 
                     response_queue.put(extracted_response.message.content)
                     transcription_queue.task_done()

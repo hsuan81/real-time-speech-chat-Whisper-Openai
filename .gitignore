@@ -10,3 +10,4 @@ playground.py
 tts-output/
 .wav
 models/
+demo/real_time_voice_conversation_openai_demo.mp4
