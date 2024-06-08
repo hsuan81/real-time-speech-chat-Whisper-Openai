@@ -6,7 +6,8 @@ This project achieves a similar feat as the OpenAI's Chatgpt 4o real-time speech
 
 ## Demo
 
-coming soon!!
+[![YouTube](http://i.ytimg.com/vi/RHeetAxe9Ys/hqdefault.jpg)](https://www.youtube.com/watch?v=RHeetAxe9Ys)
+
 
 
 ## Features
