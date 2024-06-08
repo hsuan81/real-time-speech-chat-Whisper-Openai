@@ -1,6 +1,7 @@
 pyaudio
-# whisper-cpp-python
+python-dotenv
 faster-whisper
 SpeechRecognition
+openai
 
 

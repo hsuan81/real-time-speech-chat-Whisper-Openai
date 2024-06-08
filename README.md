@@ -55,6 +55,14 @@ Install required packages locally
   conda create --name myenv pip python=3.10
   pip install -r requirements.txt
 ```
+
+For MacOS, you need to install portaudio with homebrew before installing pyaudio
+```bash
+brew install portaudio
+```
+
+
+
 ## Run
 
 Before running, you need to specify your own OPENAI KEY in .env. See `.env.example` to set up your .env file.
